@@ -1,0 +1,27 @@
+# التبعيات
+/node_modules
+
+# مخرجات البناء
+/.next/
+/out/
+/build
+next-env.d.ts
+*.tsbuildinfo
+
+# البيئة - أسرار لا تُرفع أبداً
+.env
+.env.local
+.env.*.local
+
+# قاعدة SQLite القديمة - استُبدلت بـPostgres، ولا يجوز أن تُرفع أصلاً
+# لأنها تحمل بيانات كليكات حقيقية
+tracker.db
+tracker.db-journal
+
+# فيرسل
+.vercel
+
+# النظام والمحرّرات
+.DS_Store
+Thumbs.db
+*.log
