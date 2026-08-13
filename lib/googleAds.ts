@@ -7,7 +7,9 @@
 // لازم تجهز الحاجات دي الأول من Google Ads API Center:
 // - Developer token
 // - OAuth2 client id / secret / refresh token (لحساب الـ Manager أو الحساب مباشرة)
-// - Customer ID لكل عميل (Tamkeen، Thawabet، ...)
+// أمّا Customer ID فلكلّ مشترك على حدة، ويُقرأ من `Workspace.googleAdsCustomerId`
+// عبر `tenantByWorkspaceId` - لا من متغيّر بيئة باسم عميل، وإلّا لاحتاج كلّ
+// مشترك جديد نشراً جديداً للمنصّة كلّها.
 
 import { GoogleAdsApi, enums, services } from "google-ads-api";
 import { hashPhoneE164, normalizeWhatsappPhoneToE164 } from "./enhancedConversions";
