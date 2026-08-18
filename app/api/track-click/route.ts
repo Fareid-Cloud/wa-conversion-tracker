@@ -5,15 +5,24 @@
 // كان معناه إن أي كليك من ميتا/تيك توك/سناب شات بيتحوّل للواتساب من غير
 // أي تتبع خالص - إصلاح جوهري، مش تحسين تجميلي).
 //
-// كل منصة بتضيف معرف الكليك بتاعها في رابط الإعلان تلقائياً بباراميتر
-// مختلف: جوجل = {gclid}, ميتا = {fbclid}, تيك توك = {ttclid}, سناب شات = {sc_click_id}
+// 🔴 **المنصات مش بتتصرّف بنفس الطريقة، والتعليق القديم هنا كان بيقول
+// إنها كلها بتضيف معرّفها تلقائياً - وده غلط في نص الحالات:**
+//   - **جوجل:** مبتضيفش حاجة لوحدها. لازم `?gclid={gclid}` صراحةً (ValueTrack).
+//   - **ميتا:** بتضيف `fbclid` تلقائياً على كل كليك، **وممنوع** تضيفه
+//     بإيدك (بيكسر كوكي `_fbc` اللي بيربط أحداث البيكسل بالكليك).
+//   - **تيك توك:** بتضيف `ttclid` تلقائياً من أبريل ٢٠٢٤. الإضافة اليدوي
+//     بتعمل نسخة مكرّرة والنسخة الغلط ممكن تكون اللي تتخزّن.
+//   - **سناب:** بتضيف `ScCid` تلقائياً (مش `sc_click_id` - ده اسم الحقل
+//     في Conversions API بتاعتها لا اسم الباراميتر).
+// يعني الرابط اللي بنديه للمعلن **واحد للتلاتة دول بدون أي ماكرو**،
+// وبماكرو جوجل وحدها لجوجل.
 // **الهويّة:** `ws` = معرّف مساحة العمل في AdLoop. كان الرابط يحمل سلاج
 // عميل (`client=<اسم عميل>`) مقروءاً من خريطة مكتوبة في الكود، فكان كلّ
 // مشترك جديد يتطلّب تعديلاً ونشراً. الآن يُقرأ من قاعدة البيانات، ورقم
 // الواتساب يأتي من إعدادات المساحة نفسها فلا يكتبه المعلن في الرابط.
 //
-// مثال: https://yourdomain.com/api/track-click?gclid={gclid}&ws=cms1uh...
-// أو:   https://yourdomain.com/api/track-click?fbclid={fbclid}&ws=cms1uh...
+// جوجل: https://yourdomain.com/api/track-click?ws=cms1uh...&gclid={gclid}
+// غيرها: https://yourdomain.com/api/track-click?ws=cms1uh...   (المنصة بتلحق معرّفها)
 
 import { NextRequest, NextResponse } from "next/server";
 import { customAlphabet } from "nanoid";
@@ -34,12 +43,32 @@ const VISITOR_COOKIE_MAX_AGE = 60 * 60 * 24 * 730;
 
 // أي باراميتر من دول يتحدد بيه المنصة تلقائياً - أول واحد موجود في
 // الرابط بيكسب، عشان مفيش رابط هيحتوي أكتر من واحد فعلياً في نفس الوقت
-const CLICK_ID_PARAMS: Array<{ param: string; platform: string }> = [
-  { param: "gclid", platform: "GOOGLE_ADS" },
-  { param: "fbclid", platform: "META_ADS" },
-  { param: "ttclid", platform: "TIKTOK_ADS" },
-  { param: "sc_click_id", platform: "SNAPCHAT_ADS" },
+//
+// 🔴 **سناب كانت `sc_click_id` وده غلط:** ده اسم الحقل في Conversions
+// API بتاعتها، مش الباراميتر اللي بتحطه في الرابط. سناب بتضيف `ScCid`
+// (بالحروف دي بالظبط) على الرابط الخارج من الإعلان - يعني كليك سناب
+// مكانش بيتسجّل خالص. الاسم القديم سايبينه كبديل احتياطي بس.
+const CLICK_ID_PARAMS: Array<{ params: string[]; platform: string }> = [
+  { params: ["gclid"], platform: "GOOGLE_ADS" },
+  { params: ["fbclid"], platform: "META_ADS" },
+  { params: ["ttclid"], platform: "TIKTOK_ADS" },
+  { params: ["ScCid", "sccid", "sc_click_id"], platform: "SNAPCHAT_ADS" },
 ];
+
+/**
+ * 🔴 **ماكرو ما اتبدلش مش معرّف كليك.**
+ *
+ * لو معلن نسخ رابط جوجل (`?gclid={gclid}`) وحطّه في إعلان ميتا، ميتا
+ * مش بتعرف الماكرو ده فبيوصل حرفياً `{gclid}`. اللوب كان بيلاقيه
+ * "موجود" فبيسجّل **كليك ميتا على إنه كليك جوجل** بمعرّف مزيّف - وده
+ * أسوأ من إنه ميتسجّلش: بيلوّث طبقة الحقيقة نفسها برقم مخترع.
+ *
+ * كل المنصات بتستخدم أقواس في الماكروهات بتاعتها (`{gclid}` جوجل،
+ * `{{...}}` ميتا، `__CLICKID__` تيك توك)، فالفحص واحد للكل.
+ */
+function isUnsubstitutedMacro(value: string): boolean {
+  return /[{}]/.test(value) || /^__.+__$/.test(value);
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -47,12 +76,14 @@ export async function GET(req: NextRequest) {
   let clickId: string | null = null;
   let platform: string | null = null;
 
-  for (const { param, platform: p } of CLICK_ID_PARAMS) {
-    const value = searchParams.get(param);
-    if (value) {
-      clickId = value;
-      platform = p;
-      break;
+  outer: for (const { params, platform: p } of CLICK_ID_PARAMS) {
+    for (const param of params) {
+      const value = searchParams.get(param);
+      if (value && !isUnsubstitutedMacro(value)) {
+        clickId = value;
+        platform = p;
+        break outer;
+      }
     }
   }
 
