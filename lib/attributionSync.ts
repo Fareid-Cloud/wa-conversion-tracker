@@ -140,6 +140,10 @@ export function recordConversion(params: {
   ipAddress?: string;
   userAgent?: string;
   occurredAt?: Date;
+  /** `"whatsapp"` | `"messenger"` | `"website"` - بيحدّد `action_source` عند ميتا */
+  sourceKind?: string;
+  /** `referral.ctwa_clid` من أول رسالة - الرابط بين المحادثة والإعلان */
+  ctwaClid?: string;
 }) {
   const workspaceId = params.clientId;
   if (!workspaceId) return;
@@ -158,6 +162,8 @@ export function recordConversion(params: {
     ipAddress: params.ipAddress,
     userAgent: params.userAgent,
     occurredAt: (params.occurredAt ?? new Date()).toISOString(),
+    sourceKind: params.sourceKind,
+    ctwaClid: params.ctwaClid,
   });
 }
 
