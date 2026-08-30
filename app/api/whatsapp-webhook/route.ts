@@ -143,6 +143,13 @@ export async function POST(req: NextRequest) {
           ipAddress: click.ip_address ?? undefined,
           userAgent: click.user_agent ?? undefined,
           occurredAt: new Date(),
+          // 🔴 محادثة واتساب مش زيارة موقع: الحدث اللي بيترفع لميتا بـ
+          // `action_source: "website"` بيتقبل **ومبيتنسبش للإعلان** خالص،
+          // فالخوارزمية مبتتعلّمش منه. المصدر الصح بيتحدّد من `sourceKind`،
+          // و`ctwa_clid` اللي ميتا بتبعته في `referral` على أول رسالة هو
+          // الرابط الوحيد بين المحادثة والإعلان اللي جابها.
+          sourceKind: "whatsapp",
+          ctwaClid: message.referral?.ctwa_clid ?? undefined,
         });
 
         // الرسالة نفسها لمسة أخيرة في الرحلة - من غيرها المسار بيقف عند
