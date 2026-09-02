@@ -70,6 +70,28 @@ function isUnsubstitutedMacro(value: string): boolean {
   return /[{}]/.test(value) || /^__.+__$/.test(value);
 }
 
+/**
+ * 🔴 **حدود طول - الرابط ده عامّ ومفتوح، والقيم بتتخزّن كما هي.**
+ *
+ * أطول معرّف نقرة حقيقي شفناه أقلّ من ٢٠٠ محرف، ومعرّف الحملة رقم،
+ * و`site_source_name` كلمة واحدة. من غير حدّ، أي حد يقدر يبعت قيمة
+ * بميجابايت وتتكتب في قاعدة البيانات المشتركة مع adloop - يعني تكلفة
+ * تخزين وتضخّم جدول من طلب واحد.
+ *
+ * والحدود واسعة عن قصد: الهدف منع السخافات، مش رفض قيمة شرعية طويلة
+ * شوية من منصّة غيّرت صيغتها. وأي قيمة بتعدّي بتتشال وحدها والنقرة
+ * بتفضل شغّالة - الزائر مايدفعش تمن إعداد غلط (نفس مبدأ باقي الملف).
+ */
+const MAX_CLICK_ID_LEN = 512;
+const MAX_CAMPAIGN_ID_LEN = 128;
+const MAX_SOURCE_NAME_LEN = 64;
+
+/** بترجّع القيمة لو معقولة، و`undefined` لو غايبة أو أطول من الحدّ. */
+function bounded(value: string | null, max: number): string | undefined {
+  if (!value || value.length > max) return undefined;
+  return value;
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
@@ -78,7 +100,7 @@ export async function GET(req: NextRequest) {
 
   outer: for (const { params, platform: p } of CLICK_ID_PARAMS) {
     for (const param of params) {
-      const value = searchParams.get(param);
+      const value = bounded(searchParams.get(param), MAX_CLICK_ID_LEN);
       if (value && !isUnsubstitutedMacro(value)) {
         clickId = value;
         platform = p;
@@ -91,13 +113,19 @@ export async function GET(req: NextRequest) {
   // تنكسر روابط إعلانات تعمل بالفعل، لكنه لم يعد يعني سلاجاً بل معرّف
   // مساحة عمل أيضاً.
   const workspaceId = searchParams.get("ws") ?? searchParams.get("client");
-  const campaignId = searchParams.get("campaign") ?? undefined;
+  const campaignId = bounded(searchParams.get("campaign"), MAX_CAMPAIGN_ID_LEN);
 
   // رقم الواتساب من إعدادات المساحة لا من الرابط: كتابته في كلّ إعلان
   // كانت تعني أنّ تغيير الرقم يتطلّب تعديل كلّ إعلان قائم. يبقى
   // `phone` مقبولاً كتجاوز صريح لمن يريد رقماً مختلفاً لحملة بعينها.
   const tenant = workspaceId ? await tenantByWorkspaceId(workspaceId).catch(() => null) : null;
-  const businessPhone = searchParams.get("phone") ?? tenant?.businessPhone ?? null;
+  //
+  // والتجاوز ده بيتحطّ حرفياً في مسار `wa.me` وقبل `?text=`، فأرقام بس.
+  // مايقدرش يهرب من النطاق (الأصل مثبَّت في السلسلة)، لكن `?` أو `#` جوّه
+  // القيمة بتكسر الرابط فتضيع الرسالة الجاهزة - والكود اللي جوّاها هو
+  // اللي بتتم بيه المطابقة أصلاً. `wa.me` بياخد E.164 بغير `+`.
+  const phoneOverride = searchParams.get("phone")?.replace(/\D/g, "") || null;
+  const businessPhone = phoneOverride ?? tenant?.businessPhone ?? null;
   const clientId = tenant?.workspaceId ?? null;
 
   // بتتملى بس لو صاحب الحساب ضاف {{site_source_name}} في حقل "URL
@@ -105,7 +133,7 @@ export async function GET(req: NextRequest) {
   // الحقيقية (facebook/instagram/audience_network/messenger) وقت الكليك
   // الفعلي. من غيرها، مش هنعرف المكان الأصلي للكليك خالص (موثّق في
   // activation-checklist.md قسم 4ج)
-  const siteSourceName = searchParams.get("site_source_name") ?? undefined;
+  const siteSourceName = bounded(searchParams.get("site_source_name"), MAX_SOURCE_NAME_LEN);
 
   // لو الكليك جاي من غير أي معرف كليك معروف (مثلاً حد فتح الرابط يدوي)،
   // أو المساحة غير معروفة أو بلا رقم واتساب مضبوط - نحوّله للواتساب عادي
