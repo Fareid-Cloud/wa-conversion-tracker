@@ -1,13 +1,32 @@
 // lib/attributionSync.ts
 //
-// بيوصّل wa-conversion-tracker بمحرك الإسناد في adloop-saas (قاعدة
-// بيانات مختلفة تماماً - Postgres مقابل SQLite هنا). كل النداءات
-// "best-effort" - لو adloop-saas واقعة، ميوقفش تدفق الواتساب الأساسي
-// (رفع التحويل لجوجل يفضل شغال حتى لو المزامنة دي فشلت).
+// بيوصّل wa-conversion-tracker بمحرك الإسناد في adloop-saas عبر HTTP.
+// كل النداءات "best-effort" - لو adloop-saas واقعة، ميوقفش تدفق الواتساب
+// الأساسي (رفع التحويل لجوجل يفضل شغال حتى لو المزامنة دي فشلت).
+//
+// 🔴 **"best-effort" كانت بتتحوّل لـ"مبتتبعتش أصلاً".**
+//
+// النداءات كانت `void callAdLoopApi(...)` - وعد متسايب من غير انتظار.
+// وده على Vercel مش "بيكمّل في الخلفية": اللحظة اللي الرد بيترجع فيها،
+// الـruntime بيتجمّد أو يتقفل، والـfetch اللي لسه في الطريق بيموت من غير
+// ما ينفّذ ومن غير ما يسجّل سطر واحد. يعني: كليك متسجّلش، تحقّق ماوصلش،
+// وعمود verifiedConversions - وهو دعوى المنتج نفسها - بينقص بصمت.
+//
+// **الإصلاح `after()` من `next/server`:** بتسجّل الشغل في سياق الطلب،
+// فالمنصّة بتفضل مستنية خلوصه **بعد** ما الرد يمشي. فلا الرد بيتأخّر
+// ولا النداء بيضيع - وهما الاتنين اللي كنا مضطرين نختار بينهم قبل كده.
+//
+// والمهلة (`ADLOOP_TIMEOUT_MS`) لازمة معاها: `after()` بيمدّ عمر الدالة
+// لحد `maxDuration`، فـadloop معلّقة كانت هتحجز الدالة للآخر من غير مهلة.
+
+import { after } from "next/server";
 
 // `clientId` هنا **هو** معرّف مساحة العمل مباشرةً. كانت خريطة سلاجات
 // مكتوبة في الكود تترجمه، فكان كلّ مشترك جديد يتطلّب متغيّر بيئة ونشراً.
 const ADLOOP_API_BASE = process.env.ADLOOP_API_BASE ?? "";
+
+/** أطول من كده مش استبطاء - ده طرف تاني واقع، والانتظار بيحجز الدالة. */
+const ADLOOP_TIMEOUT_MS = 8_000;
 
 async function callAdLoopApi(path: string, body: unknown) {
   if (!ADLOOP_API_BASE || !process.env.INTERNAL_SERVICE_SECRET) {
@@ -23,12 +42,29 @@ async function callAdLoopApi(path: string, body: unknown) {
         Authorization: `Bearer ${process.env.INTERNAL_SERVICE_SECRET}`,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(ADLOOP_TIMEOUT_MS),
     });
     if (!res.ok) {
       console.error(`فشلت مزامنة الإسناد (${path}): ${res.status}`);
     }
   } catch (err) {
     console.error(`فشل الاتصال بـ adloop-saas للإسناد (${path}):`, err);
+  }
+}
+
+/**
+ * بيسلّم النداء لـ`after()` فيتنفّذ بعد ما الرد يمشي، من غير ما يتأخّر
+ * الرد ومن غير ما يضيع النداء.
+ *
+ * و`after()` بترمي لو اتنادت بره سياق طلب (سكربت أو اختبار). هناك بس
+ * بنرجع للتنفيذ المتسايب: العملية في السكربت بتفضل عايشة لحد ما الشغل
+ * يخلص، فالسبب اللي خلّى `void` غلط في الـroute مش موجود أصلاً.
+ */
+function deliver(path: string, body: unknown) {
+  try {
+    after(() => callAdLoopApi(path, body));
+  } catch {
+    void callAdLoopApi(path, body);
   }
 }
 
@@ -45,7 +81,7 @@ export function syncClickToAttribution(params: {
   const workspaceId = params.clientId;
   if (!workspaceId) return;
 
-  void callAdLoopApi("/api/attribution/sync-click", {
+  deliver("/api/attribution/sync-click", {
     workspaceId,
     platform: params.platform,
     code: params.code,
@@ -68,7 +104,7 @@ export function markMatchedInAttribution(params: {
   const workspaceId = params.clientId;
   if (!workspaceId) return;
 
-  void callAdLoopApi("/api/attribution/mark-matched", {
+  deliver("/api/attribution/mark-matched", {
     workspaceId,
     code: params.code,
     conversationId: params.conversationId,
@@ -102,7 +138,7 @@ export function recordTouchpoint(params: {
   const workspaceId = params.clientId;
   if (!workspaceId) return;
 
-  void callAdLoopApi("/api/attribution/touchpoint", {
+  deliver("/api/attribution/touchpoint", {
     workspaceId,
     visitorId: params.visitorId,
     kind: params.kind,
@@ -148,7 +184,7 @@ export function recordConversion(params: {
   const workspaceId = params.clientId;
   if (!workspaceId) return;
 
-  void callAdLoopApi("/api/attribution/conversion", {
+  deliver("/api/attribution/conversion", {
     workspaceId,
     externalId: params.externalId,
     eventName: params.eventName,
