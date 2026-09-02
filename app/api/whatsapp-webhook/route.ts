@@ -75,17 +75,49 @@ export async function POST(req: NextRequest) {
 
   const body = JSON.parse(rawBody);
 
+  // 🔴 **كانت الرسالة الأولى وحدها تُعالَج، والباقي يُبتلع بردّ 200.**
+  //
+  // ميتا تُجمّع: `entry` مصفوفة، و`changes` مصفوفة، و`messages` مصفوفة -
+  // وتحت أيّ حِمل تصل عدّةُ رسائل في التسليم الواحد. وكلُّ رسالةٍ بعد
+  // الأولى كانت تُفقد نهائياً: تحويلٌ متحقَّقٌ لا يصل إلى الأرقام، ولا
+  // خطأ في أيّ سجلّ لأنّ الردّ 200 يُقنع ميتا أنّ التسليم نجح.
+  //
+  // وهذا في قلب دعوى المنتج: التحقّق من التحويل. تُقرأ كلُّ الرسائل الآن،
+  // وكلٌّ منها في `try` خاصّ بها - رسالةٌ تفشل لا تُسقط أخواتها معها،
+  // وهو ما كان يحدث حتى لو عولجت الدفعةُ كلُّها في `try` واحد.
   try {
-    const entry = body.entry?.[0];
-    const change = entry?.changes?.[0];
-    const value = change?.value;
-    const message = value?.messages?.[0];
+    let processed = 0;
+    for (const entry of body.entry ?? []) {
+      for (const change of entry?.changes ?? []) {
+        const value = change?.value;
+        for (const message of value?.messages ?? []) {
+          try {
+            await handleMessage(value, message);
+            processed++;
+          } catch (err) {
+            // معرّفُ الرسالة يُطبَع: بلا معرّفٍ لا تُعاد معالجةُ ما فشل يدوياً
+            console.error("Webhook message failed:", message?.id, err);
+          }
+        }
+      }
+    }
 
-    if (!message) {
+    if (processed === 0) {
       // إشعارات status (delivered/read) بتوصل هنا كمان، بنتجاهلها
       return NextResponse.json({ ok: true });
     }
 
+    return NextResponse.json({ ok: true, processed });
+  } catch (err) {
+    console.error("Webhook error:", err);
+    // نرجع 200 دايماً لـ Meta حتى لو حصل خطأ داخلي، عشان متوقفش إعادة المحاولة اللانهائية
+    return NextResponse.json({ ok: true });
+  }
+}
+
+/** معالجةُ رسالةٍ واحدة - مستخرَجةٌ كي تُنادى لكلّ رسالةٍ في الدفعة. */
+async function handleMessage(value: any, message: any) {
+  {
     const text: string = message.text?.body ?? "";
     const fromPhone: string = message.from ?? "";
 
@@ -183,11 +215,5 @@ export async function POST(req: NextRequest) {
         });
       }
     }
-
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("Webhook error:", err);
-    // نرجع 200 دايماً لـ Meta حتى لو حصل خطأ داخلي، عشان متوقفش إعادة المحاولة اللانهائية
-    return NextResponse.json({ ok: true });
   }
 }
